@@ -25,6 +25,7 @@ typedef struct {
 } List;
 
 int cmp_int(const void* a, const void* b);
+void pop_front(List* p_list);
 
 void *safe_malloc(const size_t size) {
 	void *ptr = malloc(size);
@@ -43,18 +44,39 @@ void *safe_strdup(const char *string) {
 
 void init_list(List* p_list, const ConstDataFp dump_data, const DataFp free_data,
 		const CompareDataFp compare_data, const DataFp modify_data) {
+	p_list->head = NULL;
+	p_list->tail = NULL;
+	p_list->dump_data = dump_data;
+	p_list->free_data = free_data;
+	p_list->compare_data = compare_data;
+	p_list->modify_data = modify_data;
 }
 
 // Print elements of the list
 void dump_list(const List* p_list) {
+	ListElement *curr = p_list->head;
+	while (curr) {
+		p_list->dump_data(curr->data);
+		curr = curr->next;
+	}
 }
 
 // Print elements of the list if comparable to data
 void dump_list_if(const List* p_list, const void *data) {
+	ListElement *curr = p_list->head;
+	while (curr) {
+		if (p_list->compare_data(curr->data, data) == 0) {
+			p_list->dump_data(curr->data);
+		}
+		curr = curr->next;
+	}
 }
 
 // Free all elements of the list
 void free_list(List* p_list) {
+	while (p_list->head != NULL) {
+		pop_front(p_list);
+	}
 }
 
 // Push element at the beginning of the list
@@ -116,43 +138,54 @@ void reverse(List* p_list) {
 
 // find an element in a sorted list after which to insert a given element
 ListElement* find_insertion_point(const List* p_list, const ListElement* p_element) {
+	ListElement *prev = NULL;
+	ListElement *curr = p_list->head;
+	while (curr != NULL) {
+		if (p_list->compare_data(curr->data, p_element->data) >= 0) {
+			break;
+		}
+		prev = curr;
+		curr = curr->next;
+	}
+
+	return prev;
 }
 
 // Insert element after 'previous'
 void push_after(List* p_list, void* data, ListElement* previous) {
+	if (previous == NULL) {
+		push_front(p_list, data);
+		return;
+	}
+
+	ListElement *new_element = safe_malloc(sizeof(ListElement));
+	new_element->data = data;
+
+	new_element->next = previous->next;
+	previous->next = new_element;
+
+	if (new_element->next == NULL) {
+		p_list->tail = new_element;
+	}
 }
 
 // Insert element preserving order
 void insert_in_order(List* p_list, void* p_data) {
-	ListElement *curr = p_list->head;
-	ListElement *prev = NULL;
-	while (curr) {
-		int cmp = p_list->compare_data(curr->data, p_data);
-		if (cmp == 0) {
-			if (p_list->modify_data) p_list->modify_data(curr->data);
-			if (p_list->free_data)   p_list->free_data(p_data);
-			return;
-		}
-		else if (cmp > 0) {
-			break;
-		}
-		else {
-			prev = curr;
-			curr = curr->next;
-		}
+	ListElement dummy_element;
+	dummy_element.data = p_data;
+	dummy_element.next = NULL;
+
+	ListElement *prev = find_insertion_point(p_list, &dummy_element);
+
+	ListElement *curr = (prev == NULL) ? p_list->head : prev->next;
+
+	if (curr != NULL && p_list->compare_data(curr->data, p_data) == 0) {
+		if (p_list->modify_data) p_list->modify_data(curr->data);
+		if (p_list->free_data)   p_list->free_data(p_data);
+		return;
 	}
-	ListElement *new_element = safe_malloc(sizeof(ListElement));
-	new_element->data = p_data;
-	new_element->next = curr;
-	if (prev == NULL) {
-		p_list->head = new_element;
-	}
-	else {
-		prev->next = new_element;
-	}
-	if (curr == NULL) {
-		p_list->tail = new_element;
-	}
+
+	push_after(p_list, p_data, prev);
 
 }
 
@@ -188,33 +221,66 @@ typedef struct DataWord {
 } DataWord;
 
 void dump_word (const void* d) {
+	const DataWord *dw = (const DataWord*)d;
+	printf("%s ", dw->word);
 }
 
 void dump_word_lowercase (const void* d) {
+	const DataWord *dw = (const DataWord*)d;
+	for (int i = 0; dw->word[i] != '\0';i++) {
+		printf("%c", tolower((unsigned char)dw->word[i]));
+	}
+	printf(" ");
 }
 
 void free_word(void* d) {
+	DataWord *dw = (DataWord*)d;
+	free(dw->word);
+	free(dw);
 }
 
 int cmp_word_alphabet(const void* a, const void* b) {
+	const DataWord *dw_a = (const DataWord*)a;
+	const DataWord *dw_b = (const DataWord*)b;
+	return strcasecmp(dw_a->word,dw_b->word);
 }
 
 int cmp_word_counter(const void* a, const void* b) {
+	const DataWord *dw_a = (const DataWord*)a;
+	const DataWord *dw_b = (const DataWord*)b;
+	return dw_a->counter - dw_b->counter;
 }
 
 void modify_word(void* p) {
+	DataWord *dw = (DataWord*)p;
+	dw->counter++;
 }
 
 void* create_data_word(const char* string, const int counter) {
+	DataWord *dw = safe_malloc(sizeof(DataWord));
+	dw->word = safe_strdup(string);
+	dw->counter = counter;
+	return dw;
 }
 
-// Read text, parse it to words, and insert those words to the list.
-// The order of insertions is given by the last parameter of type CompareDataFp.
-// (comparator function address). If this address is not NULL, the element is
-// inserted according to the comparator. Otherwise, read order is preserved.
 void stream_to_list(List* p_list, FILE* stream) {
 	const char delimits[] = " \r\t\n.,?!:;-";
+	char buffer[BUFFER_SIZE];
+	while (fgets(buffer, BUFFER_SIZE, stream) != NULL) {
+		char *token = strtok(buffer, delimits);
+		while (token != NULL) {
+			void *word_data = create_data_word(token, 1);
+			if (p_list->compare_data == NULL) {
+				push_back(p_list, word_data);
+			} else {
+				insert_in_order(p_list, word_data);
+			}
+
+			token = strtok(NULL, delimits);
+		}
+	}
 }
+
 
 // test an integer list
 void list_test(List* p_list, const int n) {
